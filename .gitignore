@@ -1,0 +1,102 @@
+############################################
+# .NET / C#
+############################################
+
+# Build results
+bin/
+obj/
+**/bin/
+**/obj/
+**/[Dd]ebug/
+**/[Dd]ebugPublic/
+**/[Rr]elease/
+**/[Rr]eleases/
+**/x64/
+**/x86/
+**/[Ww][Ii][Nn]32/
+**/[Aa][Rr][Mm]/
+**/[Aa][Rr][Mm]64/
+**/bld/
+
+# Logs
+**/*.log
+**/[Ll]og/
+**/[Ll]ogs/
+
+# Dotnet tool artifacts
+**/artifacts/
+**/.nuget/packages/
+*.nupkg
+*.snupkg
+
+# MSBuild / VS build logs
+**/*.binlog
+
+# Test results
+**/[Tt]est[Rr]esult*/
+**/[Bb]uild[Ll]og.*
+
+# User-specific files
+**/*.user
+**/*.suo
+**/*.userosscache
+**/*.sln.docstates
+
+############################################
+# IDEs / Editors
+############################################
+
+# Visual Studio
+.vs/
+.vscode/
+**/.vscode/
+
+# JetBrains Rider / IntelliJ
+.idea/
+*.sln.iml
+
+# MonoDevelop / Xamarin
+*.userprefs
+
+############################################
+# OS junk
+############################################
+.DS_Store
+Thumbs.db
+
+############################################
+# Env / secrets
+############################################
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
+############################################
+# Docker
+############################################
+docker-compose.override.yml
+
+############################################
+# EF / DB / local state
+############################################
+**/*.db
+**/*.db-shm
+**/*.db-wal
+
+############################################
+# Node / frontend (if any)
+############################################
+**/node_modules/
+**/dist/
+**/build/
+**/.vite/
+
+############################################
+# Coverage / reports
+############################################
+**/coverage/
+**/*.coverage
+**/*.coveragexml

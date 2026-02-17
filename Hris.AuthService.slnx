@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Hris.AuthService.Api/Hris.AuthService.Api.csproj" />
+    <Project Path="src/Hris.AuthService.Application/Hris.AuthService.Application.csproj" />
+    <Project Path="src/Hris.AuthService.Domain/Hris.AuthService.Domain.csproj" />
+    <Project Path="src/Hris.AuthService.Infrastructure/Hris.AuthService.Infrastructure.csproj" />
+  </Folder>
+</Solution>
