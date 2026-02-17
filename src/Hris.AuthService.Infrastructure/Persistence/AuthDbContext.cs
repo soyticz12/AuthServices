@@ -24,10 +24,26 @@ public class AuthDbContext : DbContext
         {
             e.ToTable("companies");
             e.HasKey(x => x.Id);
-            e.Property(x => x.Id).HasDefaultValueSql("gen_random_uuid()");
-            e.Property(x => x.Name).IsRequired();
+
+            e.Property(x => x.Id)
+                .HasColumnName("id")
+                .HasDefaultValueSql("gen_random_uuid()");
+
+            e.Property(x => x.Name)
+                .HasColumnName("name")
+                .IsRequired();
+
+            e.Property(x => x.Code)
+                .HasColumnName("code");
+
+            e.Property(x => x.CreatedAt)
+                .HasColumnName("created_at")
+                .HasDefaultValueSql("now()")
+                .IsRequired();
+
             e.HasIndex(x => x.Code).IsUnique();
         });
+
 
         b.Entity<User>(e =>
         {

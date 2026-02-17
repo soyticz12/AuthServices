@@ -49,8 +49,9 @@ public static class SeedData
             };
             admin.PasswordHash = hasher.Hash(admin, "admin123");
             db.Users.Add(admin);
+            await db.SaveChangesAsync(); // Save user first to get the ID
 
-            // default profile + preferences
+            // Now add related entities with the actual UserId
             db.UserProfiles.Add(new UserProfile { UserId = admin.Id, FirstName = "System", LastName = "Admin" });
             db.UserPreferences.Add(new UserPreference { UserId = admin.Id, PrefsJson = """{"theme":"system"}""" });
 

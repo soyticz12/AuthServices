@@ -14,19 +14,35 @@ public static class ServiceRegistration
     {
         services.AddControllers();
 
-        // Database
+        // Database - Build connection string from environment variables
+        var dbHost = config["DB_HOST"];
+        var dbPort = config["DB_PORT"];
+        var dbName = config["DB_NAME"];
+        var dbUser = config["DB_USER"];
+        var dbPassword = config["DB_PASSWORD"];
+
+        var connectionString = $"Host={dbHost};Port={dbPort};Database={dbName};Username={dbUser};Password={dbPassword};";
+
         services.AddDbContext<AuthDbContext>(opt =>
-            opt.UseNpgsql(config.GetConnectionString("AuthDb"))
+            opt.UseNpgsql(connectionString)
+            .UseSnakeCaseNamingConvention()
         );
 
-        // JWT options
+        // JWT options - Validate key is set
+        var jwtKey = config["JWT_KEY"];
+        if (string.IsNullOrWhiteSpace(jwtKey))
+        {
+            throw new InvalidOperationException(
+                "JWT_KEY is not configured. Ensure JWT_KEY is set in your .env file and properly loaded via builder.AddEnv()");
+        }
+
         var jwt = new JwtOptions
         {
-            Issuer = config["Jwt:Issuer"] ?? "",
-            Audience = config["Jwt:Audience"] ?? "",
-            Key = config["Jwt:Key"] ?? "",
-            AccessTokenMinutes = int.TryParse(config["Jwt:AccessTokenMinutes"], out var m) ? m : 15,
-            RefreshTokenDays = int.TryParse(config["Jwt:RefreshTokenDays"], out var d) ? d : 14
+            Issuer = config["JWT_ISSUER"] ?? "Hris.AuthService",
+            Audience = config["JWT_AUDIENCE"] ?? "Hris.Client",
+            Key = jwtKey,
+            AccessTokenMinutes = int.TryParse(config["JWT_ACCESS_MINUTES"], out var m) ? m : 15,
+            RefreshTokenDays = int.TryParse(config["JWT_REFRESH_DAYS"], out var d) ? d : 14
         };
         services.AddSingleton(jwt);
 
