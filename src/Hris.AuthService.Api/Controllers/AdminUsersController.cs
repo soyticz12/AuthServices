@@ -1,10 +1,7 @@
 using Hris.AuthService.Api.Security;
-using Hris.AuthService.Domain.Entities;
-using Hris.AuthService.Infrastructure.Persistence;
-using Hris.AuthService.Infrastructure.Security;
+using Hris.AuthService.Application.Auth.Admin;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace Hris.AuthService.Api.Controllers;
 
@@ -13,14 +10,9 @@ namespace Hris.AuthService.Api.Controllers;
 [Authorize(Policy = "AdminOnly")]
 public class AdminUsersController : ControllerBase
 {
-    private readonly AuthDbContext _db;
-    private readonly PasswordHasherAdapter _hasher;
+    private readonly CreateUserHandler _create;
 
-    public AdminUsersController(AuthDbContext db, PasswordHasherAdapter hasher)
-    {
-        _db = db;
-        _hasher = hasher;
-    }
+    public AdminUsersController(CreateUserHandler create) => _create = create;
 
     public record CreateUserRequest(
         string Username,
@@ -32,43 +24,15 @@ public class AdminUsersController : ControllerBase
     );
 
     [HttpPost]
-    public async Task<IActionResult> CreateUser([FromBody] CreateUserRequest req)
+    public async Task<IActionResult> CreateUser([FromBody] CreateUserRequest req, CancellationToken ct)
     {
         var companyId = CurrentUser.CompanyId(User);
 
-        var exists = await _db.Users.AnyAsync(u => u.CompanyId == companyId && u.Username == req.Username);
-        if (exists) return BadRequest("Username already exists.");
+        var result = await _create.Handle(
+            new CreateUserCommand(companyId, req.Username, req.Password, req.Email, req.FirstName, req.LastName, req.Roles),
+            ct);
 
-        var user = new User
-        {
-            CompanyId = companyId,
-            Username = req.Username,
-            Email = req.Email,
-            IsActive = true
-        };
-        user.PasswordHash = _hasher.Hash(user, req.Password);
-
-        _db.Users.Add(user);
-
-        _db.UserProfiles.Add(new UserProfile
-        {
-            UserId = user.Id,
-            FirstName = req.FirstName,
-            LastName = req.LastName
-        });
-
-        _db.UserPreferences.Add(new UserPreference
-        {
-            UserId = user.Id,
-            PrefsJson = """{"theme":"system"}"""
-        });
-
-        // attach roles (must exist for this company)
-        var roles = await _db.Roles.Where(r => r.CompanyId == companyId && req.Roles.Contains(r.Name)).ToListAsync();
-        foreach (var r in roles)
-            _db.UserRoles.Add(new UserRole { UserId = user.Id, RoleId = r.Id });
-
-        await _db.SaveChangesAsync();
-        return Ok(new { user.Id });
+        if (!result.IsSuccess) return StatusCode(result.StatusCode, result.Error);
+        return Ok(new { id = result.Value });
     }
 }

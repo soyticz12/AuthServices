@@ -1,8 +1,9 @@
-using Hris.AuthService.Domain.Entities;
-using Hris.AuthService.Infrastructure.Persistence;
-using Hris.AuthService.Infrastructure.Security;
+using Hris.AuthService.Application.Abstractions;
+using Hris.AuthService.Application.Auth.Login;
+using Hris.AuthService.Application.Auth.Refresh;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace Hris.AuthService.Api.Controllers;
 
@@ -10,107 +11,111 @@ namespace Hris.AuthService.Api.Controllers;
 [Route("auth")]
 public class AuthController : ControllerBase
 {
-    private readonly AuthDbContext _db;
-    private readonly TokenService _tokens;
-    private readonly PasswordHasherAdapter _hasher;
-    private readonly JwtOptions _jwt;
+    private readonly LoginHandler _login;
+    private readonly RefreshHandler _refresh;
+    private readonly ILoginThrottler _throttler;
 
-    public AuthController(AuthDbContext db, TokenService tokens, PasswordHasherAdapter hasher, JwtOptions jwt)
+    public AuthController(LoginHandler login, RefreshHandler refresh, ILoginThrottler throttler)
     {
-        _db = db;
-        _tokens = tokens;
-        _hasher = hasher;
-        _jwt = jwt;
+        _login = login;
+        _refresh = refresh;
+        _throttler = throttler;
+    }
+
+    private static string FormatMinSec(int totalSeconds)
+    {
+        var m = totalSeconds / 60;
+        var s = totalSeconds % 60;
+        return $"{m:D2}:{s:D2}";
     }
 
     public record LoginRequest(string Username, string Password, string CompanyCode);
-    public record LoginResponse(string AccessToken, string RefreshToken);
 
+    [AllowAnonymous]
+    [EnableRateLimiting("login")]
     [HttpPost("login")]
-    public async Task<ActionResult<LoginResponse>> Login([FromBody] LoginRequest req)
+    public async Task<IActionResult> Login([FromBody] LoginRequest req, CancellationToken ct)
     {
-        var company = await _db.Companies.FirstOrDefaultAsync(c => c.Code == req.CompanyCode);
-        if (company == null) return Unauthorized("Invalid company.");
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var ua = Request.Headers.UserAgent.ToString();
 
-        var user = await _db.Users
-            .Include(u => u.UserRoles).ThenInclude(ur => ur.Role)
-            .FirstOrDefaultAsync(u => u.CompanyId == company.Id && u.Username == req.Username);
-
-        if (user == null || !user.IsActive) return Unauthorized("Invalid credentials.");
-        if (!_hasher.Verify(user, req.Password)) return Unauthorized("Invalid credentials.");
-
-        var roles = user.UserRoles.Select(ur => ur.Role!.Name).ToList();
-
-        user.LastLoginAt = DateTimeOffset.UtcNow;
-
-        // Create refresh token (store hash)
-        var refreshPlain = TokenService.GenerateRefreshToken();
-        var refreshHash = TokenService.HashToken(refreshPlain);
-
-        _db.RefreshTokens.Add(new RefreshToken
+        // ✅ Check lock
+        var (locked, retryAfterSeconds) = await _throttler.IsLockedAsync(req.CompanyCode, req.Username, ip, ct);
+        if (locked)
         {
-            UserId = user.Id,
-            TokenHash = refreshHash,
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(_jwt.RefreshTokenDays),
-            CreatedByIp = HttpContext.Connection.RemoteIpAddress?.ToString(),
-            UserAgent = Request.Headers.UserAgent.ToString()
-        });
+            var lockUntilUtc = DateTimeOffset.UtcNow.AddSeconds(retryAfterSeconds);
 
-        await _db.SaveChangesAsync();
+            Response.Headers["Retry-After"] = retryAfterSeconds.ToString();
 
-        var access = _tokens.CreateAccessToken(user, roles);
-        return Ok(new LoginResponse(access, refreshPlain));
+            var pd = new ProblemDetails
+            {
+                Title = "Too Many Requests",
+                Status = StatusCodes.Status429TooManyRequests,
+                Detail = $"Too many failed login attempts. Try again at {lockUntilUtc:O} (UTC)."
+            };
+
+            pd.Extensions["retryAfterSeconds"] = retryAfterSeconds;
+            pd.Extensions["retryAfter"] = FormatMinSec(retryAfterSeconds); // ✅ not "time"
+            pd.Extensions["lockUntilUtc"] = lockUntilUtc.ToString("O");
+
+            return StatusCode(StatusCodes.Status429TooManyRequests, pd);
+        }
+
+        var result = await _login.Handle(new LoginCommand(req.Username, req.Password, req.CompanyCode), ip, ua, ct);
+
+        if (result.IsSuccess)
+        {
+            await _throttler.ClearAsync(req.CompanyCode, req.Username, ip, ct); // ✅ reset lock level
+            return Ok(result.Value);
+        }
+
+        // ✅ Count only wrong password (usually 401)
+        if (result.StatusCode == StatusCodes.Status401Unauthorized)
+        {
+            var (lockedNow, lockSeconds, attempts) =
+                await _throttler.RegisterFailureAsync(req.CompanyCode, req.Username, ip, ct);
+
+            if (lockedNow)
+            {
+                var lockUntilUtc = DateTimeOffset.UtcNow.AddSeconds(lockSeconds);
+                Response.Headers["Retry-After"] = lockSeconds.ToString();
+
+                var pd = new ProblemDetails
+                {
+                    Title = "Too Many Requests",
+                    Status = StatusCodes.Status429TooManyRequests,
+                    Detail = $"Too many failed login attempts. Try again at {lockUntilUtc:O} (UTC)."
+                };
+
+                pd.Extensions["retryAfterSeconds"] = lockSeconds;
+                pd.Extensions["retryAfter"] = FormatMinSec(lockSeconds);
+                pd.Extensions["lockUntilUtc"] = lockUntilUtc.ToString("O");
+
+                return StatusCode(StatusCodes.Status429TooManyRequests, pd);
+            }
+
+            // Optional: you can include attempts if you want
+            // return StatusCode(401, new { error = result.Error, attempts });
+
+            return StatusCode(result.StatusCode, result.Error);
+        }
+
+        return StatusCode(result.StatusCode, result.Error);
     }
 
     public record RefreshRequest(string RefreshToken);
-    public record RefreshResponse(string AccessToken, string RefreshToken);
 
+    [AllowAnonymous]
+    [EnableRateLimiting("refresh")]
     [HttpPost("refresh")]
-    public async Task<ActionResult<RefreshResponse>> Refresh([FromBody] RefreshRequest req)
+    public async Task<IActionResult> Refresh([FromBody] RefreshRequest req, CancellationToken ct)
     {
-        var hash = TokenService.HashToken(req.RefreshToken);
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var ua = Request.Headers.UserAgent.ToString();
 
-        var rt = await _db.RefreshTokens
-            .Include(x => x.User).ThenInclude(u => u!.UserRoles).ThenInclude(ur => ur.Role)
-            .FirstOrDefaultAsync(x => x.TokenHash == hash);
+        var result = await _refresh.Handle(new RefreshCommand(req.RefreshToken), ip, ua, ct);
+        if (!result.IsSuccess) return StatusCode(result.StatusCode, result.Error);
 
-        if (rt == null || !rt.IsActive || rt.User == null || !rt.User.IsActive)
-            return Unauthorized("Invalid refresh token.");
-
-        // rotate refresh token
-        rt.RevokedAt = DateTimeOffset.UtcNow;
-        var newPlain = TokenService.GenerateRefreshToken();
-        var newHash = TokenService.HashToken(newPlain);
-
-        var newRt = new RefreshToken
-        {
-            UserId = rt.UserId,
-            TokenHash = newHash,
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(_jwt.RefreshTokenDays),
-            CreatedByIp = HttpContext.Connection.RemoteIpAddress?.ToString(),
-            UserAgent = Request.Headers.UserAgent.ToString(),
-        };
-        rt.ReplacedByTokenId = newRt.Id;
-
-        _db.RefreshTokens.Add(newRt);
-        await _db.SaveChangesAsync();
-
-        var roles = rt.User.UserRoles.Select(ur => ur.Role!.Name).ToList();
-        var access = _tokens.CreateAccessToken(rt.User, roles);
-
-        return Ok(new RefreshResponse(access, newPlain));
-    }
-
-    public record LogoutRequest(string RefreshToken);
-
-    [HttpPost("logout")]
-    public async Task<IActionResult> Logout([FromBody] LogoutRequest req)
-    {
-        var hash = TokenService.HashToken(req.RefreshToken);
-        var rt = await _db.RefreshTokens.FirstOrDefaultAsync(x => x.TokenHash == hash);
-        if (rt == null) return Ok(); // idempotent
-        rt.RevokedAt = DateTimeOffset.UtcNow;
-        await _db.SaveChangesAsync();
-        return Ok();
+        return Ok(result.Value);
     }
 }

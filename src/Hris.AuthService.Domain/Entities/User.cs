@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Hris.AuthService.Domain.Entities;
 
 public class User
@@ -9,6 +11,7 @@ public class User
     public string Username { get; set; } = "";
     public string? Email { get; set; }
 
+    [JsonIgnore]
     public string PasswordHash { get; set; } = "";
     public bool IsActive { get; set; } = true;
 

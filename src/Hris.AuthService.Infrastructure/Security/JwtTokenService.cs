@@ -2,25 +2,31 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using Hris.AuthService.Application.Abstractions;
 using Hris.AuthService.Domain.Entities;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Hris.AuthService.Infrastructure.Security;
 
-public class TokenService
+public sealed class TokenService : ITokenService
 {
     private readonly JwtOptions _opt;
 
     public TokenService(JwtOptions opt) => _opt = opt;
 
-    public string CreateAccessToken(User user, IEnumerable<string> roles)
+    public string CreateAccessToken(User user, IReadOnlyCollection<string> roles)
     {
         if (string.IsNullOrWhiteSpace(_opt.Key) || _opt.Key.Length < 32)
             throw new InvalidOperationException("JWT Key must be at least 32 characters.");
 
+        var now = DateTimeOffset.UtcNow;
+
         var claims = new List<Claim>
         {
             new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
+            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N")),
+            new(JwtRegisteredClaimNames.Iat, now.ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
+
             new("company_id", user.CompanyId.ToString()),
             new(ClaimTypes.Name, user.Username),
         };
@@ -29,7 +35,7 @@ public class TokenService
             claims.Add(new Claim(ClaimTypes.Email, user.Email));
 
         foreach (var r in roles)
-            claims.Add(new Claim(ClaimTypes.Role, r)); // RBAC via claims
+            claims.Add(new Claim(ClaimTypes.Role, r));
 
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_opt.Key));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
@@ -38,23 +44,26 @@ public class TokenService
             issuer: _opt.Issuer,
             audience: _opt.Audience,
             claims: claims,
-            expires: DateTime.UtcNow.AddMinutes(_opt.AccessTokenMinutes),
+            notBefore: now.UtcDateTime,
+            expires: now.UtcDateTime.AddMinutes(_opt.AccessTokenMinutes),
             signingCredentials: creds
         );
 
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
-    public static string GenerateRefreshToken()
+    public string GenerateRefreshTokenPlain()
     {
-        // 32 bytes -> 43 char base64url-ish
         var bytes = RandomNumberGenerator.GetBytes(32);
-        return Convert.ToBase64String(bytes);
+        return Base64UrlEncode(bytes);
     }
 
-    public static string HashToken(string token)
+    public string HashRefreshToken(string refreshTokenPlain)
     {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
-        return Convert.ToHexString(bytes); // deterministic hex hash
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(refreshTokenPlain));
+        return Base64UrlEncode(bytes);
     }
+
+    private static string Base64UrlEncode(byte[] data)
+        => Base64UrlEncoder.Encode(data);
 }

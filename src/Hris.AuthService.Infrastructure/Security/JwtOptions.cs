@@ -1,10 +1,12 @@
+using Hris.AuthService.Application.Abstractions;
+
 namespace Hris.AuthService.Infrastructure.Security;
 
-public class JwtOptions
+public sealed class JwtOptions : IJwtOptions
 {
-    public string Issuer { get; set; } = "";
-    public string Audience { get; set; } = "";
-    public string Key { get; set; } = "";
-    public int AccessTokenMinutes { get; set; } = 15;
-    public int RefreshTokenDays { get; set; } = 14;
+    public string Issuer { get; init; } = "Hris.AuthService";
+    public string Audience { get; init; } = "Hris.Client";
+    public string Key { get; init; } = string.Empty;
+    public int AccessTokenMinutes { get; init; } = 15;
+    public int RefreshTokenDays { get; init; } = 14;
 }

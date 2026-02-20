@@ -25,6 +25,7 @@ public class MeController : ControllerBase
         var u = await _db.Users
             .Include(x => x.Profile)
             .Include(x => x.Photo)
+            .AsNoTracking()
             .FirstOrDefaultAsync(x => x.Id == userId && x.CompanyId == companyId);
 
         if (u == null) return NotFound();
@@ -34,10 +35,19 @@ public class MeController : ControllerBase
             u.Id,
             u.Username,
             u.Email,
-            Profile = u.Profile,
+            Profile = u.Profile == null ? null : new
+            {
+                u.Profile.FirstName,
+                u.Profile.LastName,
+                u.Profile.Phone,
+                u.Profile.Department,
+                u.Profile.JobTitle,
+                u.Profile.UpdatedAt
+            },
             PhotoUrl = u.Photo?.PhotoUrl
         });
     }
+
 
     public record UpdateProfileRequest(string? FirstName, string? LastName, string? Phone, string? Department, string? JobTitle);
 

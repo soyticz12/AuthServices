@@ -1,9 +1,10 @@
+using Hris.AuthService.Application.Abstractions;
 using Hris.AuthService.Domain.Entities;
 using Microsoft.AspNetCore.Identity;
 
 namespace Hris.AuthService.Infrastructure.Security;
 
-public class PasswordHasherAdapter
+public class PasswordHasherAdapter : IPasswordHasher
 {
     private readonly PasswordHasher<User> _hasher = new();
 

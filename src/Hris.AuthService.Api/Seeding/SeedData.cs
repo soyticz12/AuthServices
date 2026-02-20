@@ -1,6 +1,6 @@
+using Hris.AuthService.Application.Abstractions;
 using Hris.AuthService.Domain.Entities;
 using Hris.AuthService.Infrastructure.Persistence;
-using Hris.AuthService.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
 
 namespace Hris.AuthService.Api.Seeding;
@@ -11,59 +11,182 @@ public static class SeedData
     {
         using var scope = app.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AuthDbContext>();
-        var hasher = scope.ServiceProvider.GetRequiredService<PasswordHasherAdapter>();
+        var hasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
 
         await db.Database.MigrateAsync();
 
-        // Company
-        var company = await db.Companies.FirstOrDefaultAsync(c => c.Code == "DEFAULT");
-        if (company == null)
-        {
-            company = new Company { Name = "Default Company", Code = "DEFAULT" };
-            db.Companies.Add(company);
-            await db.SaveChangesAsync();
-        }
+        // 1) Companies
+        var finteq = await EnsureCompanyAsync(db, "Finteq", "FINTEQ");
+        var anb = await EnsureCompanyAsync(db, "AnB", "ANB");
 
-        // Roles
-        var neededRoles = new[] { "Admin", "HR", "Finance", "Employee" };
-        foreach (var r in neededRoles)
-        {
-            var exists = await db.Roles.AnyAsync(x => x.CompanyId == company.Id && x.Name == r);
-            if (!exists) db.Roles.Add(new Role { CompanyId = company.Id, Name = r });
-        }
+        // 2) System roles per company
+        var systemRoles = new[] { "Admin", "Finance", "Standard User" };
+
+        await EnsureRolesAsync(db, finteq.Id, systemRoles);
+        await EnsureRolesAsync(db, anb.Id, systemRoles);
+
+        // 3) Sample users (per company)
+        // Passwords: change later
+        await EnsureUserWithRoleAsync(db, hasher,
+            companyId: finteq.Id,
+            username: "finteq_admin",
+            email: "admin@finteq.local",
+            password: "admin123",
+            firstName: "Finteq",
+            lastName: "Admin",
+            systemRoleName: "Admin",
+            workRole: "President"
+        );
+
+        await EnsureUserWithRoleAsync(db, hasher,
+            companyId: finteq.Id,
+            username: "finteq_finance",
+            email: "finance@finteq.local",
+            password: "finance123",
+            firstName: "Finteq",
+            lastName: "Finance",
+            systemRoleName: "Finance",
+            workRole: "Manager"
+        );
+
+        await EnsureUserWithRoleAsync(db, hasher,
+            companyId: finteq.Id,
+            username: "finteq_user",
+            email: "user@finteq.local",
+            password: "user123",
+            firstName: "Finteq",
+            lastName: "User",
+            systemRoleName: "Standard User",
+            workRole: "Standard Employee"
+        );
+
+        await EnsureUserWithRoleAsync(db, hasher,
+            companyId: anb.Id,
+            username: "anb_admin",
+            email: "admin@anb.local",
+            password: "admin123",
+            firstName: "AnB",
+            lastName: "Admin",
+            systemRoleName: "Admin",
+            workRole: "Vice President"
+        );
+
+        await EnsureUserWithRoleAsync(db, hasher,
+            companyId: anb.Id,
+            username: "anb_finance",
+            email: "finance@anb.local",
+            password: "finance123",
+            firstName: "AnB",
+            lastName: "Finance",
+            systemRoleName: "Finance",
+            workRole: "TL"
+        );
+
+        await EnsureUserWithRoleAsync(db, hasher,
+            companyId: anb.Id,
+            username: "anb_user",
+            email: "user@anb.local",
+            password: "user123",
+            firstName: "AnB",
+            lastName: "User",
+            systemRoleName: "Standard User",
+            workRole: "Standard Employee"
+        );
+    }
+
+    private static async Task<Company> EnsureCompanyAsync(AuthDbContext db, string name, string code)
+    {
+        var company = await db.Companies.FirstOrDefaultAsync(c => c.Code == code);
+        if (company != null) return company;
+
+        company = new Company { Name = name, Code = code };
+        db.Companies.Add(company);
         await db.SaveChangesAsync();
+        return company;
+    }
 
-        // Admin user: admin / admin123 (change later)
-        var admin = await db.Users
-            .Include(u => u.UserRoles)
-            .FirstOrDefaultAsync(u => u.CompanyId == company.Id && u.Username == "admin");
-
-        if (admin == null)
+    private static async Task EnsureRolesAsync(AuthDbContext db, Guid companyId, IEnumerable<string> roleNames)
+    {
+        foreach (var roleName in roleNames)
         {
-            admin = new User
+            var exists = await db.Roles.AnyAsync(r => r.CompanyId == companyId && r.Name == roleName);
+            if (!exists)
             {
-                CompanyId = company.Id,
-                Username = "admin",
-                Email = "admin@local",
-                IsActive = true
-            };
-            admin.PasswordHash = hasher.Hash(admin, "admin123");
-            db.Users.Add(admin);
-            await db.SaveChangesAsync(); // Save user first to get the ID
+                db.Roles.Add(new Role { CompanyId = companyId, Name = roleName });
+            }
+        }
 
-            // Now add related entities with the actual UserId
-            db.UserProfiles.Add(new UserProfile { UserId = admin.Id, FirstName = "System", LastName = "Admin" });
-            db.UserPreferences.Add(new UserPreference { UserId = admin.Id, PrefsJson = """{"theme":"system"}""" });
+        await db.SaveChangesAsync();
+    }
+
+    private static async Task EnsureUserWithRoleAsync(
+        AuthDbContext db,
+        IPasswordHasher hasher,
+        Guid companyId,
+        string username,
+        string email,
+        string password,
+        string firstName,
+        string lastName,
+        string systemRoleName,
+        string workRole
+    )
+    {
+        var user = await db.Users.FirstOrDefaultAsync(u => u.CompanyId == companyId && u.Username == username);
+
+        if (user == null)
+        {
+            user = new User
+            {
+                CompanyId = companyId,
+                Username = username,
+                Email = email,
+                IsActive = true,
+                PasswordHash = "" // set below
+            };
+            user.PasswordHash = hasher.Hash(user, password);
+
+            db.Users.Add(user);
+            await db.SaveChangesAsync(); // to get user.Id
+
+            // Profile
+            db.UserProfiles.Add(new UserProfile
+            {
+                UserId = user.Id,
+                FirstName = firstName,
+                LastName = lastName
+            });
+
+            // Preferences (store work role here for now)
+            db.UserPreferences.Add(new UserPreference
+            {
+                UserId = user.Id,
+                PrefsJson = $$"""{"theme":"system","workRole":"{{workRole}}"}"""
+            });
 
             await db.SaveChangesAsync();
         }
-
-        // Attach Admin role
-        var adminRole = await db.Roles.FirstAsync(r => r.CompanyId == company.Id && r.Name == "Admin");
-        var hasAdminRole = await db.UserRoles.AnyAsync(ur => ur.UserId == admin.Id && ur.RoleId == adminRole.Id);
-        if (!hasAdminRole)
+        else
         {
-            db.UserRoles.Add(new UserRole { UserId = admin.Id, RoleId = adminRole.Id });
+            // Ensure preferences exist (optional)
+            var pref = await db.UserPreferences.FirstOrDefaultAsync(p => p.UserId == user.Id);
+            if (pref == null)
+            {
+                db.UserPreferences.Add(new UserPreference
+                {
+                    UserId = user.Id,
+                    PrefsJson = $$"""{"theme":"system","workRole":"{{workRole}}"}"""
+                });
+                await db.SaveChangesAsync();
+            }
+        }
+
+        // Attach system role
+        var role = await db.Roles.FirstAsync(r => r.CompanyId == companyId && r.Name == systemRoleName);
+        var hasRole = await db.UserRoles.AnyAsync(ur => ur.UserId == user.Id && ur.RoleId == role.Id);
+        if (!hasRole)
+        {
+            db.UserRoles.Add(new UserRole { UserId = user.Id, RoleId = role.Id });
             await db.SaveChangesAsync();
         }
     }
