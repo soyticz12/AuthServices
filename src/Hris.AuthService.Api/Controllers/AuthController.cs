@@ -1,9 +1,11 @@
 using Hris.AuthService.Application.Abstractions;
 using Hris.AuthService.Application.Auth.Login;
 using Hris.AuthService.Application.Auth.Refresh;
+using Hris.AuthService.Application.Auth.Logout; // ✅ add
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using System.IdentityModel.Tokens.Jwt;
 
 namespace Hris.AuthService.Api.Controllers;
 
@@ -13,12 +15,18 @@ public class AuthController : ControllerBase
 {
     private readonly LoginHandler _login;
     private readonly RefreshHandler _refresh;
+    private readonly LogoutHandler _logout;          // ✅ add
     private readonly ILoginThrottler _throttler;
 
-    public AuthController(LoginHandler login, RefreshHandler refresh, ILoginThrottler throttler)
+    public AuthController(
+        LoginHandler login,
+        RefreshHandler refresh,
+        LogoutHandler logout,                       // ✅ add
+        ILoginThrottler throttler)
     {
         _login = login;
         _refresh = refresh;
+        _logout = logout;                           // ✅ add
         _throttler = throttler;
     }
 
@@ -39,7 +47,6 @@ public class AuthController : ControllerBase
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
         var ua = Request.Headers.UserAgent.ToString();
 
-        // ✅ Check lock
         var (locked, retryAfterSeconds) = await _throttler.IsLockedAsync(req.CompanyCode, req.Username, ip, ct);
         if (locked)
         {
@@ -55,7 +62,7 @@ public class AuthController : ControllerBase
             };
 
             pd.Extensions["retryAfterSeconds"] = retryAfterSeconds;
-            pd.Extensions["retryAfter"] = FormatMinSec(retryAfterSeconds); // ✅ not "time"
+            pd.Extensions["retryAfter"] = FormatMinSec(retryAfterSeconds);
             pd.Extensions["lockUntilUtc"] = lockUntilUtc.ToString("O");
 
             return StatusCode(StatusCodes.Status429TooManyRequests, pd);
@@ -65,14 +72,13 @@ public class AuthController : ControllerBase
 
         if (result.IsSuccess)
         {
-            await _throttler.ClearAsync(req.CompanyCode, req.Username, ip, ct); // ✅ reset lock level
+            await _throttler.ClearAsync(req.CompanyCode, req.Username, ip, ct);
             return Ok(result.Value);
         }
 
-        // ✅ Count only wrong password (usually 401)
         if (result.StatusCode == StatusCodes.Status401Unauthorized)
         {
-            var (lockedNow, lockSeconds, attempts) =
+            var (lockedNow, lockSeconds, _) =
                 await _throttler.RegisterFailureAsync(req.CompanyCode, req.Username, ip, ct);
 
             if (lockedNow)
@@ -94,9 +100,6 @@ public class AuthController : ControllerBase
                 return StatusCode(StatusCodes.Status429TooManyRequests, pd);
             }
 
-            // Optional: you can include attempts if you want
-            // return StatusCode(401, new { error = result.Error, attempts });
-
             return StatusCode(result.StatusCode, result.Error);
         }
 
@@ -117,5 +120,37 @@ public class AuthController : ControllerBase
         if (!result.IsSuccess) return StatusCode(result.StatusCode, result.Error);
 
         return Ok(result.Value);
+    }
+
+    public record LogoutRequest(string RefreshToken);
+
+    [Authorize]
+    [HttpPost("logout")]
+    public async Task<IActionResult> Logout([FromBody] LogoutRequest req, CancellationToken ct)
+    {
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var ua = Request.Headers.UserAgent.ToString();
+
+        // Parse jti and expiry from the bearer token
+        string? jti = null;
+        DateTime? expiry = null;
+
+        var raw = Request.Headers.Authorization.ToString();
+        if (raw.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        {
+            var token = raw["Bearer ".Length..].Trim();
+            var handler = new JwtSecurityTokenHandler();
+            if (handler.CanReadToken(token))
+            {
+                var jwt = handler.ReadJwtToken(token);
+                jti = jwt.Id;
+                expiry = jwt.ValidTo;
+            }
+        }
+
+        var result = await _logout.Handle(new LogoutCommand(req.RefreshToken, jti, expiry), ip, ua, ct);
+        if (!result.IsSuccess) return StatusCode(result.StatusCode, result.Error);
+
+        return Ok(new { success = true });
     }
 }

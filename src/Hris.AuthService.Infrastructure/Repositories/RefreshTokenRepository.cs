@@ -24,4 +24,25 @@ public sealed class RefreshTokenRepository : IRefreshTokenRepository
     }
 
     public Task SaveChangesAsync(CancellationToken ct) => _db.SaveChangesAsync(ct);
+
+    public async Task<bool> RevokeByRawTokenAsync(string rawToken, string? revokedByIp, string? userAgent, CancellationToken ct)
+    {
+
+        var tokenHash = rawToken;
+
+        var t = await _db.RefreshTokens
+            .FirstOrDefaultAsync(x => x.TokenHash == tokenHash, ct);
+
+        if (t == null) return false;
+
+        if (t.RevokedAt != null) return true;
+
+        t.RevokedAt = DateTimeOffset.UtcNow;
+        t.CreatedByIp = revokedByIp;
+        t.UserAgent = userAgent;
+
+        await _db.SaveChangesAsync(ct);
+
+        return true;
+    }
 }

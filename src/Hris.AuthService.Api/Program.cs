@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Threading.RateLimiting;
 using dotenv.net;
 using Hris.AuthService.Api.Configuration;
+using Hris.AuthService.Api.Middleware;
 using Hris.AuthService.Api.Seeding;
 using Microsoft.AspNetCore.Mvc;
 
@@ -34,7 +35,7 @@ var builder = WebApplication.CreateBuilder(args);
 // ✅ MUST be before AddApiServices so config["JWT_KEY"] is populated
 builder.Configuration.AddEnvironmentVariables();
 
-// CORS
+// ✅ CORS
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
@@ -45,7 +46,7 @@ builder.Services.AddCors(options =>
     });
 });
 
-// Swagger (no OpenApi models)
+// ✅ Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
@@ -54,7 +55,6 @@ builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
-    // Optional: return JSON body for 429
     options.OnRejected = async (context, _) =>
     {
         if (!context.HttpContext.Response.HasStarted)
@@ -99,7 +99,7 @@ builder.Services.AddRateLimiter(options =>
     });
 });
 
-// Your registrations (DbContext, handlers, auth, etc.)
+// ✅ Your registrations (DbContext, handlers, auth, etc.)
 builder.Services.AddApiServices(builder.Configuration);
 
 var app = builder.Build();
@@ -123,7 +123,7 @@ app.UseExceptionHandler(errorApp =>
 
 app.UseCors("AllowAll");
 
-// ✅ Request logging (logs 200/401/403/429/500 etc.)
+// ✅ Request logging
 app.Use(async (context, next) =>
 {
     var sw = Stopwatch.StartNew();
@@ -153,13 +153,14 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-// ✅ Enable rate limiting middleware (put before auth/authorization)
+// ✅ Rate limiting (before auth)
 app.UseRateLimiter();
 
-// If you're calling via HTTP (like localhost:8080), HTTPS redirection can confuse clients.
-// app.UseHttpsRedirection();
-
 app.UseAuthentication();
+
+// ✅ Token blacklist check (after authentication, before authorization)
+app.UseMiddleware<TokenBlacklistMiddleware>();
+
 app.UseAuthorization();
 
 app.MapControllers();

@@ -14,10 +14,8 @@ public sealed class AdminUserRepository : IAdminUserRepository
     public Task<bool> UsernameExistsAsync(Guid companyId, string username, CancellationToken ct)
     {
         var u = username.Trim();
-        // If you want case-insensitive uniqueness regardless of DB collation:
+
         return _db.Users.AnyAsync(x => x.CompanyId == companyId && x.Username == u, ct);
-        // For strict case-insensitive:
-        // return _db.Users.AnyAsync(x => x.CompanyId == companyId && x.Username.ToLower() == u.ToLower(), ct);
     }
 
     public Task<List<Role>> GetRolesByNamesAsync(Guid companyId, IEnumerable<string> roleNames, CancellationToken ct)
@@ -37,11 +35,11 @@ public sealed class AdminUserRepository : IAdminUserRepository
         IEnumerable<Role> roles,
         CancellationToken ct)
     {
-        // 1) Save user first to get user.Id (important if DB generates it)
+        // 1) Save user 
         _db.Users.Add(user);
         await _db.SaveChangesAsync(ct);
 
-        // 2) Now attach profile + prefs with the real user.Id
+        // 2) attach profile + prefs 
         profile.UserId = user.Id;
         preference.UserId = user.Id;
 
